@@ -11,7 +11,7 @@ app.use(express.json());
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-// function to attach full artist and gallery objects to paintings
+// Helper function to attach full artist and gallery objects to paintings
 async function attachArtistAndGallery(paintingsList) {
     if (!paintingsList || paintingsList.length === 0) return paintingsList;
 
@@ -55,14 +55,14 @@ app.get('/', (req, res) => {
     res.json({ status: "API is up and running!" });
 });
 
-// 1. Eras route
+// Eras route
 app.get('/api/eras', async (req, res) => {
     let { data, error } = await supabase.from('eras').select('*');
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
 
-// 2. Galleries routes
+// Galleries routes
 app.get('/api/galleries', async (req, res) => {
     let { data, error } = await supabase.from('galleries').select('*');
     if (error) return res.status(500).json({ error: error.message });
@@ -77,7 +77,6 @@ app.get('/api/galleries/country/:substring', async (req, res) => {
     res.json(data);
 });
 
-// Route handling numeric ref or city string
 app.get('/api/galleries/:ref', async (req, res) => {
     let refVal = req.params.ref;
 
@@ -94,7 +93,7 @@ app.get('/api/galleries/:ref', async (req, res) => {
     }
 });
 
-// 3. Artists routes
+// Artists routes
 app.get('/api/artists', async (req, res) => {
     let { data, error } = await supabase.from('artists').select('*');
     if (error) return res.status(500).json({ error: error.message });
@@ -125,7 +124,7 @@ app.get('/api/artists/:ref', async (req, res) => {
     res.json(data[0]);
 });
 
-// 4. Genres routes
+// Genres routes
 app.get('/api/genres', async (req, res) => {
     let { data, error } = await supabase.from('genres').select('*, eras(*)');
     if (error) return res.status(500).json({ error: error.message });
@@ -154,7 +153,7 @@ app.get('/api/genres/:ref', async (req, res) => {
     res.json(data[0]);
 });
 
-// 5. Paintings routes
+// Paintings routes
 app.get('/api/paintings/single/:ref', async (req, res) => {
     let id = req.params.ref;
     let { data, error } = await supabase.from('paintings').select('*').eq('paintingId', id);
@@ -293,7 +292,6 @@ app.get('/api/paintings/sort/:field/limit/:limit', async (req, res) => {
     res.json(enriched);
 });
 
-// Fallback handling for missing optional parameter routes
 app.get('/api/paintings/sort/:field/limit', (req, res) => {
     res.status(404).json({ error: "Limit parameter missing." });
 });
@@ -302,17 +300,22 @@ app.get('/api/paintings/sort/:field/limit/:limit/skip', (req, res) => {
     res.status(404).json({ error: "Skip parameter missing." });
 });
 
-// 6. Counts & Aggregations routes
+// Counts & Aggregations routes (with robust null/error safety checks)
 app.get('/api/counts/genres', async (req, res) => {
-    let { data: genres } = await supabase.from('genres').select('genreId, genreName');
-    let { data: pg } = await supabase.from('paintinggenres').select('genreId');
+    let { data: genres, error: genresErr } = await supabase.from('genres').select('genreId, genreName');
+    if (genresErr) return res.status(500).json({ error: genresErr.message });
+
+    let { data: pg, error: pgErr } = await supabase.from('paintinggenres').select('genreId');
+    if (pgErr) return res.status(500).json({ error: pgErr.message });
 
     let counts = {};
-    pg.forEach(item => {
-        counts[item.genreId] = (counts[item.genreId] || 0) + 1;
-    });
+    if (pg) {
+        pg.forEach(item => {
+            counts[item.genreId] = (counts[item.genreId] || 0) + 1;
+        });
+    }
 
-    let result = genres.map(g => ({
+    let result = (genres || []).map(g => ({
         genreName: g.genreName,
         count: counts[g.genreId] || 0
     })).sort((a, b) => a.count - b.count);
@@ -321,15 +324,20 @@ app.get('/api/counts/genres', async (req, res) => {
 });
 
 app.get('/api/counts/artists', async (req, res) => {
-    let { data: artists } = await supabase.from('artists').select('artistId, firstName, lastName');
-    let { data: paintings } = await supabase.from('paintings').select('artistId');
+    let { data: artists, error: artistsErr } = await supabase.from('artists').select('artistId, firstName, lastName');
+    if (artistsErr) return res.status(500).json({ error: artistsErr.message });
+
+    let { data: paintings, error: pErr } = await supabase.from('paintings').select('artistId');
+    if (pErr) return res.status(500).json({ error: pErr.message });
 
     let counts = {};
-    paintings.forEach(p => {
-        counts[p.artistId] = (counts[p.artistId] || 0) + 1;
-    });
+    if (paintings) {
+        paintings.forEach(p => {
+            counts[p.artistId] = (counts[p.artistId] || 0) + 1;
+        });
+    }
 
-    let result = artists.map(art => {
+    let result = (artists || []).map(art => {
         let name = art.firstName ? `${art.firstName} ${art.lastName}` : art.lastName;
         return {
             artistName: name,
@@ -344,15 +352,20 @@ app.get('/api/counts/topgenres/:ref', async (req, res) => {
     let threshold = parseInt(req.params.ref);
     if (isNaN(threshold)) return res.status(404).json({ error: "Invalid threshold number." });
 
-    let { data: genres } = await supabase.from('genres').select('genreId, genreName');
-    let { data: pg } = await supabase.from('paintinggenres').select('genreId');
+    let { data: genres, error: genresErr } = await supabase.from('genres').select('genreId, genreName');
+    if (genresErr) return res.status(500).json({ error: genresErr.message });
+
+    let { data: pg, error: pgErr } = await supabase.from('paintinggenres').select('genreId');
+    if (pgErr) return res.status(500).json({ error: pgErr.message });
 
     let counts = {};
-    pg.forEach(item => {
-        counts[item.genreId] = (counts[item.genreId] || 0) + 1;
-    });
+    if (pg) {
+        pg.forEach(item => {
+            counts[item.genreId] = (counts[item.genreId] || 0) + 1;
+        });
+    }
 
-    let result = genres.map(g => ({
+    let result = (genres || []).map(g => ({
         genreName: g.genreName,
         count: counts[g.genreId] || 0
     })).filter(item => item.count > threshold).sort((a, b) => b.count - a.count);
