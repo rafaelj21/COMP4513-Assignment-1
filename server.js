@@ -1,3 +1,4 @@
+
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
@@ -17,26 +18,28 @@ async function attachArtistAndGallery(paintings) {
     let isArray = Array.isArray(paintings);
     let list = isArray ? paintings : [paintings];
 
-    let artistIds = [...new Set(list.map(p => p.artistId || p.artist_id).filter(Boolean))];
-    let galleryIds = [...new Set(list.map(p => p.galleryId || p.gallery_id).filter(Boolean))];
+    let artistIds = [...new Set(list.map(p => p.artistID).filter(Boolean))];
+    let galleryIds = [...new Set(list.map(p => p.galleryID).filter(Boolean))];
 
     let artistsMap = {};
     let galleriesMap = {};
 
     if (artistIds.length > 0) {
-        let { data: artists } = await supabase.from('artists').select('*').in('artistId', artistIds);
-        if (artists) artists.forEach(a => artistsMap[a.artistId || a.artist_id] = a);
+        let { data: artists, error } = await supabase.from('artists').select('*').in('artistId', artistIds);
+        if (error) throw error;
+        if (artists) artists.forEach(a => artistsMap[a.artistId] = a);
     }
 
     if (galleryIds.length > 0) {
-        let { data: galleries } = await supabase.from('galleries').select('*').in('galleryId', galleryIds);
-        if (galleries) galleries.forEach(g => galleriesMap[g.galleryId || g.gallery_id] = g);
+        let { data: galleries, error } = await supabase.from('galleries').select('*').in('galleryId', galleryIds);
+        if (error) throw error;
+        if (galleries) galleries.forEach(g => galleriesMap[g.galleryId] = g);
     }
 
     let result = list.map(p => ({
         ...p,
-        artists: artistsMap[p.artistId || p.artist_id] || null,
-        galleries: galleriesMap[p.galleryId || p.gallery_id] || null
+        artists: artistsMap[p.artistID] || null,
+        galleries: galleriesMap[p.galleryID] || null
     }));
 
     return isArray ? result : result[0];
@@ -70,7 +73,7 @@ app.get('/api/galleries/country/:substring', async (req, res) => {
 
 app.get('/api/galleries/:ref', async (req, res) => {
     let ref = req.params.ref;
-    if (!isNaN(parseInt(ref))) {
+    if (!isNaN(parseInt(ref)) && /^\d+$/.test(ref)) {
         let { data, error } = await supabase.from('galleries').select('*').eq('galleryId', parseInt(ref));
         if (error) return res.status(500).json({ error: error.message });
         if (!data || data.length === 0) return res.status(404).json({ error: "Gallery not found." });
@@ -127,9 +130,9 @@ app.get('/api/genres/painting/:ref', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No genres found for this painting." });
 
-    let genreIds = data.map(item => item.genreId || item.genre_id);
-    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*, eras(*)').in('genreId', genreIds).order('genreName', { ascending: true });
-    
+    let genreIds = data.map(item => item.genreId);
+    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*, eras(*)').in('genreID', genreIds).order('genreName', { ascending: true });
+
     if (genresErr) return res.status(500).json({ error: genresErr.message });
     if (!genresData || genresData.length === 0) return res.status(404).json({ error: "No valid genres returned." });
     res.json(genresData);
@@ -137,7 +140,7 @@ app.get('/api/genres/painting/:ref', async (req, res) => {
 
 app.get('/api/genres/:ref', async (req, res) => {
     let id = req.params.ref;
-    let { data, error } = await supabase.from('genres').select('*, eras(*)').eq('genreId', id);
+    let { data, error } = await supabase.from('genres').select('*, eras(*)').eq('genreID', id);
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "Genre not found." });
     res.json(data[0]);
@@ -146,12 +149,16 @@ app.get('/api/genres/:ref', async (req, res) => {
 // Paintings
 app.get('/api/paintings/single/:ref', async (req, res) => {
     let id = req.params.ref;
-    let { data, error } = await supabase.from('paintings').select('*').eq('paintingId', id);
+    let { data, error } = await supabase.from('paintings').select('*').eq('paintingID', id);
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "Painting not found." });
-    
-    let enriched = await attachArtistAndGallery(data[0]);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data[0]);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/search/:substring', async (req, res) => {
@@ -159,16 +166,20 @@ app.get('/api/paintings/search/:substring', async (req, res) => {
     let { data, error } = await supabase.from('paintings').select('*').ilike('title', `%${term}%`).order('yearOfWork', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings matched that search term." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/years/:start/:end', async (req, res) => {
     let startYear = parseInt(req.params.start);
     let endYear = parseInt(req.params.end);
-    
-    if (isNaN(startYear) || isNaN(endYear)) return res.status(404).json({ error: "Invalid year numbers provided." });
+
+    if (isNaN(startYear) || isNaN(endYear)) return res.status(400).json({ error: "Invalid year numbers provided." });
     if (endYear < startYear) {
         return res.status(400).json({ error: "Error: End year cannot be earlier than start year." });
     }
@@ -176,29 +187,41 @@ app.get('/api/paintings/years/:start/:end', async (req, res) => {
     let { data, error } = await supabase.from('paintings').select('*').gte('yearOfWork', startYear).lte('yearOfWork', endYear).order('yearOfWork', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found in that year range." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/galleries/:ref', async (req, res) => {
     let galRef = req.params.ref;
-    let { data, error } = await supabase.from('paintings').select('*').eq('galleryId', galRef).order('yearOfWork', { ascending: true });
+    let { data, error } = await supabase.from('paintings').select('*').eq('galleryID', galRef).order('yearOfWork', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found for this gallery." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/artist/:ref', async (req, res) => {
     let artRef = req.params.ref;
-    let { data, error } = await supabase.from('paintings').select('*').eq('artistId', artRef).order('yearOfWork', { ascending: true });
+    let { data, error } = await supabase.from('paintings').select('*').eq('artistID', artRef).order('yearOfWork', { ascending: true });
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found for this artist." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/genre/:ref', async (req, res) => {
@@ -207,9 +230,9 @@ app.get('/api/paintings/genre/:ref', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found for this genre." });
 
-    let pIds = data.map(item => item.paintingId || item.painting_id);
-    let { data: paintingsData, error: pErr } = await supabase.from('paintings').select('paintingId, title, yearOfWork').in('paintingId', pIds).order('yearOfWork', { ascending: true });
-    
+    let pIds = data.map(item => item.paintingId);
+    let { data: paintingsData, error: pErr } = await supabase.from('paintings').select('paintingID, title, yearOfWork').in('paintingID', pIds).order('yearOfWork', { ascending: true });
+
     if (pErr) return res.status(500).json({ error: pErr.message });
     if (!paintingsData || paintingsData.length === 0) return res.status(404).json({ error: "No paintings found." });
     res.json(paintingsData);
@@ -217,17 +240,17 @@ app.get('/api/paintings/genre/:ref', async (req, res) => {
 
 app.get('/api/paintings/era/:ref', async (req, res) => {
     let eraRef = req.params.ref;
-    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*').eq('eraId', eraRef);
+    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*').eq('eraID', eraRef);
     if (genresErr) return res.status(500).json({ error: genresErr.message });
     if (!genresData || genresData.length === 0) return res.status(404).json({ error: "Era not found." });
 
-    let genreIds = genresData.map(g => g.genreId || g.genre_id);
+    let genreIds = genresData.map(g => g.genreID);
     let { data: pgData, error: pgErr } = await supabase.from('paintinggenres').select('*').in('genreId', genreIds);
     if (pgErr) return res.status(500).json({ error: pgErr.message });
     if (!pgData || pgData.length === 0) return res.status(404).json({ error: "No paintings found for this era." });
 
-    let paintingIds = [...new Set(pgData.map(item => item.paintingId || item.painting_id))];
-    let { data: paintingsData, error: pErr } = await supabase.from('paintings').select('paintingId, title, yearOfWork').in('paintingId', paintingIds).order('yearOfWork', { ascending: true });
+    let paintingIds = [...new Set(pgData.map(item => item.paintingId))];
+    let { data: paintingsData, error: pErr } = await supabase.from('paintings').select('paintingID, title, yearOfWork').in('paintingID', paintingIds).order('yearOfWork', { ascending: true });
 
     if (pErr) return res.status(500).json({ error: pErr.message });
     if (!paintingsData || paintingsData.length === 0) return res.status(404).json({ error: "No paintings found." });
@@ -239,27 +262,41 @@ app.get('/api/paintings/sort/:field/limit/:limit/skip/:skip', async (req, res) =
     let limit = parseInt(req.params.limit);
     let skip = parseInt(req.params.skip);
 
-    if (isNaN(limit) || isNaN(skip)) return res.status(404).json({ error: "Invalid limit or skip values." });
+    if (isNaN(limit) || isNaN(skip) || limit < 0 || skip < 0) {
+        return res.status(400).json({ error: "Invalid limit or skip values." });
+    }
 
     let column = field === 'year' ? 'yearOfWork' : 'title';
-    if (field !== 'year' && field !== 'title') return res.status(404).json({ error: "Invalid sort field." });
+    if (field !== 'year' && field !== 'title') return res.status(400).json({ error: "Invalid sort field." });
 
-    let { data, error } = await supabase.from('paintings').select('*').order(column, { ascending: true }).range(skip, skip + limit - 1);
+    let query = supabase.from('paintings').select('*').order(column, { ascending: true });
+
+    if (limit > 0) {
+        query = query.range(skip, skip + limit - 1);
+    } else {
+        query = query.range(skip, skip + 999);
+    }
+
+    let { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found for this skip range." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/sort/:field/limit/:limit', async (req, res) => {
     let field = req.params.field.toLowerCase();
     let limit = parseInt(req.params.limit);
 
-    if (isNaN(limit)) return res.status(404).json({ error: "Invalid limit value." });
+    if (isNaN(limit) || limit < 0) return res.status(400).json({ error: "Invalid limit value." });
 
     let column = field === 'year' ? 'yearOfWork' : 'title';
-    if (field !== 'year' && field !== 'title') return res.status(404).json({ error: "Invalid sort field." });
+    if (field !== 'year' && field !== 'title') return res.status(400).json({ error: "Invalid sort field." });
 
     let query = supabase.from('paintings').select('*').order(column, { ascending: true });
     if (limit > 0) query = query.limit(limit);
@@ -267,9 +304,13 @@ app.get('/api/paintings/sort/:field/limit/:limit', async (req, res) => {
     let { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "No paintings found." });
-    
-    let enriched = await attachArtistAndGallery(data);
-    res.json(enriched);
+
+    try {
+        let enriched = await attachArtistAndGallery(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/paintings/sort/:field/limit', (req, res) => {
@@ -282,72 +323,67 @@ app.get('/api/paintings/sort/:field/limit/:limit/skip', (req, res) => {
 
 // Counts & Aggregations
 app.get('/api/counts/genres', async (req, res) => {
-    let { data: genres } = await supabase.from('genres').select('*');
-    let { data: pg } = await supabase.from('paintinggenres').select('*');
+    let { data: genres, error: genresErr } = await supabase.from('genres').select('*');
+    if (genresErr) return res.status(500).json({ error: genresErr.message });
+
+    let { data: pg, error: pgErr } = await supabase.from('paintinggenres').select('*');
+    if (pgErr) return res.status(500).json({ error: pgErr.message });
 
     let counts = {};
     if (pg) pg.forEach(item => {
-        let gId = item.genreId || item.genre_id;
+        let gId = item.genreId;
         if (gId) counts[gId] = (counts[gId] || 0) + 1;
     });
 
-    let result = (genres || []).map(g => {
-        let gId = g.genreId || g.genre_id;
-        let gName = g.genreName || g.genre_name;
-        return {
-            genreName: gName,
-            count: counts[gId] || 0
-        };
-    }).sort((a, b) => a.count - b.count);
+    let result = (genres || []).map(g => ({
+        genreName: g.genreName,
+        count: counts[g.genreID] || 0
+    })).sort((a, b) => a.count - b.count);
 
     res.json(result);
 });
 
 app.get('/api/counts/artists', async (req, res) => {
-    let { data: artists } = await supabase.from('artists').select('*');
-    let { data: paintings } = await supabase.from('paintings').select('*');
+    let { data: artists, error: artistsErr } = await supabase.from('artists').select('*');
+    if (artistsErr) return res.status(500).json({ error: artistsErr.message });
+
+    let { data: paintings, error: paintingsErr } = await supabase.from('paintings').select('artistID');
+    if (paintingsErr) return res.status(500).json({ error: paintingsErr.message });
 
     let counts = {};
     if (paintings) paintings.forEach(p => {
-        let aId = p.artistId || p.artist_id;
+        let aId = p.artistID;
         if (aId) counts[aId] = (counts[aId] || 0) + 1;
     });
 
-    let result = (artists || []).map(art => {
-        let aId = art.artistId || art.artist_id;
-        let fName = art.firstName || art.first_name || '';
-        let lName = art.lastName || art.last_name || '';
-        let name = fName ? `${fName} ${lName}` : lName;
-        return {
-            artistName: name,
-            count: counts[aId] || 0
-        };
-    }).sort((a, b) => b.count - a.count);
+    let result = (artists || []).map(art => ({
+        artistName: `${art.firstName || ''} ${art.lastName || ''}`.trim(),
+        count: counts[art.artistId] || 0
+    })).sort((a, b) => b.count - a.count);
 
     res.json(result);
 });
 
 app.get('/api/counts/topgenres/:ref', async (req, res) => {
     let threshold = parseInt(req.params.ref);
-    if (isNaN(threshold)) return res.status(404).json({ error: "Invalid threshold number." });
+    if (isNaN(threshold) || threshold < 0) return res.status(400).json({ error: "Invalid threshold number." });
 
-    let { data: genres } = await supabase.from('genres').select('*');
-    let { data: pg } = await supabase.from('paintinggenres').select('*');
+    let { data: genres, error: genresErr } = await supabase.from('genres').select('*');
+    if (genresErr) return res.status(500).json({ error: genresErr.message });
+
+    let { data: pg, error: pgErr } = await supabase.from('paintinggenres').select('*');
+    if (pgErr) return res.status(500).json({ error: pgErr.message });
 
     let counts = {};
     if (pg) pg.forEach(item => {
-        let gId = item.genreId || item.genre_id;
+        let gId = item.genreId;
         if (gId) counts[gId] = (counts[gId] || 0) + 1;
     });
 
-    let result = (genres || []).map(g => {
-        let gId = g.genreId || g.genre_id;
-        let gName = g.genreName || g.genre_name;
-        return {
-            genreName: gName,
-            count: counts[gId] || 0
-        };
-    }).filter(item => item.count > threshold).sort((a, b) => b.count - a.count);
+    let result = (genres || []).map(g => ({
+        genreName: g.genreName,
+        count: counts[g.genreID] || 0
+    })).filter(item => item.count > threshold).sort((a, b) => b.count - a.count);
 
     if (result.length === 0) return res.status(404).json({ error: "No genres found above that count." });
     res.json(result);
