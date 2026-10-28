@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
@@ -40,6 +39,29 @@ async function attachArtistAndGallery(paintings) {
         ...p,
         artists: artistsMap[p.artistID] || null,
         galleries: galleriesMap[p.galleryID] || null
+    }));
+
+    return isArray ? result : result[0];
+}
+
+// Helper to attach era info to genres (avoids Supabase schema cache relation errors)
+async function attachEra(genres) {
+    if (!genres) return genres;
+    let isArray = Array.isArray(genres);
+    let list = isArray ? genres : [genres];
+
+    let eraIds = [...new Set(list.map(g => g.eraID).filter(Boolean))];
+    let erasMap = {};
+
+    if (eraIds.length > 0) {
+        let { data: eras, error } = await supabase.from('eras').select('*').in('eraId', eraIds);
+        if (error) throw error;
+        if (eras) eras.forEach(e => erasMap[e.eraId] = e);
+    }
+
+    let result = list.map(g => ({
+        ...g,
+        eras: erasMap[g.eraID] || null
     }));
 
     return isArray ? result : result[0];
@@ -119,9 +141,14 @@ app.get('/api/artists/:ref', async (req, res) => {
 
 // Genres
 app.get('/api/genres', async (req, res) => {
-    let { data, error } = await supabase.from('genres').select('*, eras(*)');
+    let { data, error } = await supabase.from('genres').select('*');
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    try {
+        let enriched = await attachEra(data);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/genres/painting/:ref', async (req, res) => {
@@ -131,19 +158,31 @@ app.get('/api/genres/painting/:ref', async (req, res) => {
     if (!data || data.length === 0) return res.status(404).json({ error: "No genres found for this painting." });
 
     let genreIds = data.map(item => item.genreId);
-    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*, eras(*)').in('genreID', genreIds).order('genreName', { ascending: true });
+    let { data: genresData, error: genresErr } = await supabase.from('genres').select('*').in('genreID', genreIds).order('genreName', { ascending: true });
 
     if (genresErr) return res.status(500).json({ error: genresErr.message });
     if (!genresData || genresData.length === 0) return res.status(404).json({ error: "No valid genres returned." });
-    res.json(genresData);
+
+    try {
+        let enriched = await attachEra(genresData);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/genres/:ref', async (req, res) => {
     let id = req.params.ref;
-    let { data, error } = await supabase.from('genres').select('*, eras(*)').eq('genreID', id);
+    let { data, error } = await supabase.from('genres').select('*').eq('genreID', id);
     if (error) return res.status(500).json({ error: error.message });
     if (!data || data.length === 0) return res.status(404).json({ error: "Genre not found." });
-    res.json(data[0]);
+
+    try {
+        let enriched = await attachEra(data[0]);
+        res.json(enriched);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Paintings
